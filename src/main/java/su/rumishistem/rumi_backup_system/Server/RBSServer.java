@@ -185,7 +185,7 @@ public class RBSServer {
 
 									try {
 										SQL.new_auto_commit_connection().update_execute("INSERT INTO `BACKUP` (`ID`, `BUCKET`, `CREATE_AT`, `COMPRESS_SIZE`, `ORIGINAL_SIZE`, `MIMETYPE`) VALUES (?, ?, NOW(), ?, ?, ?)", new Object[]{
-											backup_id, bucket_id, file_size, tmp_file.length(), mimetype
+											backup_id, bucket_id, tmp_file.length(), file_size, mimetype
 										});
 									} catch (SQLException ex) {
 										ex.printStackTrace();
