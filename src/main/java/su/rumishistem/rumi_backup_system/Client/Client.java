@@ -66,6 +66,47 @@ public class Client {
 					}
 				}
 
+				case "psql": {
+					if (args.length < 5) throw new IllegalArgumentException("一時ファイルの書き込み場所が必要です");
+
+					data = new File(args[4] + UUID.randomUUID().toString());
+					mimetype = "text/plain";
+
+					ProcessBuilder pb = new ProcessBuilder("/usr/bin/pg_dumpall");
+
+					try {
+						Process p = pb.start();
+						InputStream in = p.getInputStream();
+						FileOutputStream fos = new FileOutputStream(data);
+
+						byte[] buffer = new byte[8192];
+						int rl;
+						while ((rl = in.read(buffer)) != -1) {
+							fos.write(buffer, 0, rl);
+						}
+
+						fos.close();
+
+						int exit = p.waitFor();
+						if (exit != 0) {
+							throw new IOException("ステータスコード: " + exit);
+						}
+
+						size = data.length();
+						break;
+					} catch (IOException ex) {
+						if (data.exists()) data.delete();
+						ex.printStackTrace();
+						System.exit(1);
+						return;
+					} catch (InterruptedException ex) {
+						if (data.exists()) data.delete();
+						ex.printStackTrace();
+						System.exit(1);
+						return;
+					}
+				}
+
 				//ファイル
 				default: {
 					File backup_target = new File(args[3]);
