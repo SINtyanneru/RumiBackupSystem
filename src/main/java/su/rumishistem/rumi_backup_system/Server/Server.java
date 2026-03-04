@@ -1,142 +1,150 @@
 package su.rumishistem.rumi_backup_system.Server;
 
-import java.io.*;
-import java.net.*;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.util.UUID;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
 
-import su.rumishistem.rumi_backup_system.Main;
-import su.rumishistem.rumi_backup_system.Server.Type.ClientType;
-import su.rumishistem.rumi_backup_system.Tool.Binary;
+import su.rumishistem.rumi_java_sql.SQL;
+import su.rumishistem.rumi_java_sql.SQLC;
+import su.rumishistem.rumi_java_sql.SQLValue;
 
 public class Server {
-	private static final byte[] WELCOME_MESSAGE = new byte[]{0x25, 'R', 'B', 'S', 0x00, 0x00, 0x00, 0x00, 0x03, '1', '.', '0'};
-
 	public static void main(String[] args) {
 		System.out.println("RBS Server");
 
+		//設定
 		try {
-			ServerSocket tcp = new ServerSocket(Main.CLIENT_PORT);
-			System.out.println("ｸﾗｲｱﾝﾄｻｰﾊﾞｰ起動");
+			Config.load();
+		} catch (Exception ex) {
+			ex.printStackTrace();
+			System.err.println("設定ﾌｧｲﾙを読み込めませんでした。");
+			System.exit(1);
+			return;
+		}
 
-			while (true) {
-				final Socket socket = tcp.accept();
-				new Thread(new Runnable() {
-					@Override
-					public void run() {
-						try {
-							InputStream in = socket.getInputStream();
-							BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream());
-							ClientType type = null;
+		//SQL
+		SQL.connect(
+			Config.SQL.Host,
+			String.valueOf(Config.SQL.Port),
+			Config.SQL.DB,
+			Config.SQL.User,
+			Config.SQL.Password
+		);
 
-							out.write(WELCOME_MESSAGE);
-							out.flush();
+		SQLMigration.check();
 
-							ByteArrayOutputStream baos;
-							byte[] buffer = new byte[4096];
-							int rl;
-							while ((rl = in.read(buffer)) != -1) {
-								baos = new ByteArrayOutputStream();
-								baos.write(buffer, 0, rl);
-								byte[] data = baos.toByteArray();
-								baos.close();
+		if (args.length < 2) return;
 
-								//ハンドシェイク
-								if (type == null) {
-									if (data.length == 2) {
-										if (data[0] == 0x01) {
-											switch (data[1]) {
-												case 0x01:
-													type = ClientType.Client;
-													out.write(new byte[]{0x20});
-													out.flush();
-													continue;
-												case 0x02:
-													type = ClientType.Node;
-													out.write(new byte[]{0x20});
-													out.flush();
-													continue;
-											}
-										}
-									}
+		try {
+			switch (args[1]) {
+				case "start": {
+					RBSServer.start();
+					return;
+				}
 
-									socket.close();
-									return;
-								}
+				case "bucket": {
+					if (args.length < 3) throw new IllegalArgumentException("bucketの後にcreate delete listの何れかをつけてください");
+					switch (args[2]) {
+						case "create": {
+							if (args.length < 4)  throw new IllegalArgumentException("ﾊﾞｹｯﾄ名を記述してください");
+							int id = ThreadLocalRandom.current().nextInt(1000, 9000);
+							String bucket_name = args[3];
+							int keep_gen = 10;
 
-								ByteArrayInputStream bais = new ByteArrayInputStream(data);
+							System.out.print("ﾊﾞｹｯﾄ「"+bucket_name+"」を作成しますか？ y/n >");
+							if (!y_n_check()) return;
 
-								//バックアップ命令
-								if (bais.readNBytes(1)[0] == 0x02) {
-									//0x00を飛ばす
-									bais.skipNBytes(1);
+							SQL.new_auto_commit_connection().update_execute("INSERT INTO `BUCKET` (`ID`, `NAME`, `KEEP_GEN`) VALUES (?, ?, ?);", new Object[]{
+								id, bucket_name, keep_gen
+							});
 
-									//バケット名
-									byte[] bucket_length_binary = bais.readNBytes(4);
-									int bucket_length = Binary.binary_to_int(bucket_length_binary);
-									String bucket_name = new String(bais.readNBytes(bucket_length), StandardCharsets.UTF_8);
-
-									//Mimetype
-									byte[] mimetype_length_binary = bais.readNBytes(4);
-									int mimetype_length = Binary.binary_to_int(mimetype_length_binary);
-									String mimetype = new String(bais.readNBytes(mimetype_length), StandardCharsets.UTF_8);
-
-									//ファイルサイズ
-									long file_size = Binary.binary_to_long(bais.readNBytes(8));
-
-									//受信準備
-									out.write(new byte[]{0x10});
-									out.flush();
-									bais.close();
-
-									//チェックサム
-									MessageDigest md5 = MessageDigest.getInstance("MD5");
-									//一時ファイル
-									File tmp_file = new File("./"+UUID.randomUUID().toString());
-									FileOutputStream fos = new FileOutputStream(tmp_file);
-
-									//データ受信
-									byte[] receive_buffer = new byte[8192];
-									long received_length = 0;
-									int receive_rl;
-									while ((receive_rl = in.read(receive_buffer)) != -1) {
-										md5.update(receive_buffer, 0, receive_rl);
-										fos.write(receive_buffer, 0, receive_rl);
-
-										received_length += receive_rl;
-										if (file_size == received_length) break;
-									}
-									fos.close();
-
-									//チェックサム受信待機
-									out.write(new byte[]{0x10});
-									out.flush();
-									byte[] client_checksum = in.readNBytes(16);
-									byte[] server_checksum = md5.digest();
-
-									//チェックサムチェック
-									for (int i = 16; i < client_checksum.length; i++) {
-										if (client_checksum[i] != server_checksum[i]) {
-											out.write(new byte[]{0x40});
-											out.flush();
-											tmp_file.delete();
-											return;
-										}
-									}
-
-									//成功
-									out.write(new byte[]{0x20});
-									out.flush();
-								}
-							}
-						} catch (Exception ex) {
-							ex.printStackTrace();
+							System.out.println("OK");
+							return;
 						}
+
+						case "delete": {
+							if (args.length < 4)  throw new IllegalArgumentException("ﾊﾞｹｯﾄ名を記述してください");
+							String bucket_name = args[3];
+
+							System.out.print("ﾊﾞｹｯﾄ「"+bucket_name+"」を削除しますか？ y/n >");
+							if (!y_n_check()) return;
+
+							SQL.new_auto_commit_connection().update_execute("DELETE FROM `BUCKET` WHERE `NAME` = ? LIMIT 1;", new Object[]{
+								bucket_name
+							});
+
+							System.out.println("OK");
+							return;
+						}
+
+						case "list": {
+							Map<String, SQLValue>[] list = SQL.new_auto_commit_connection().select_execute("""
+								SELECT
+									b.*,
+									(SELECT
+										COUNT(*)
+									FROM
+										`BACKUP`
+									WHERE
+										`BUCKET` = b.ID
+									) AS `GEN_COUNT`,
+									(SELECT
+										`CREATE_AT`
+									FROM
+										`BACKUP`
+									WHERE
+										`BUCKET` = b.ID
+									ORDER BY
+										`CREATE_AT` ASC
+									LIMIT 1
+									) AS `OLD`,
+									(SELECT
+										`CREATE_AT`
+									FROM
+										`BACKUP`
+									WHERE
+										`BUCKET` = b.ID
+									ORDER BY
+										`CREATE_AT` DESC
+									LIMIT 1
+									) AS `LAST`
+								FROM
+									`BUCKET` AS b;
+							""", new Object[0]);
+
+							for (Map<String, SQLValue> row:list) {
+								String id = row.get("ID").as_string();
+								String name = row.get("NAME").as_string();
+								int keep_gen = row.get("KEEP_GEN").as_int();
+								long saved_gen = row.get("GEN_COUNT").as_long();
+								LocalDateTime last_saved = ((Timestamp)row.get("LAST").as_object()).toLocalDateTime();
+								LocalDateTime old_saved = ((Timestamp)row.get("OLD").as_object()).toLocalDateTime();
+
+								System.out.println("┌[" + name + "](" + id + ")");
+								System.out.println("├保持数: " + keep_gen + "\\" + saved_gen);
+								System.out.println("├最新: " + last_saved.format(DateTimeFormatter.ISO_DATE_TIME));
+								System.out.println("└最古: " + old_saved.format(DateTimeFormatter.ISO_DATE_TIME));
+							}
+							return;
+						}
+
+						default:
+							throw new IllegalArgumentException("createか、deleteか、listのみ使用可能です。");
 					}
-				}).run();
+				}
+
+				default:
+					throw new IllegalArgumentException("そのようなコマンドはありません。");
 			}
 		} catch (IOException ex) {
+			ex.printStackTrace();
+		} catch (SQLException ex) {
 			ex.printStackTrace();
 		}
 	}
@@ -147,5 +155,13 @@ public class Server {
 			sb.append(String.format("%02X ", b));
 		}
 		return sb.toString();
+	}
+
+	private static boolean y_n_check() throws IOException{
+		BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
+		String line = br.readLine();
+		if (line == null) return false;
+		if (line.equalsIgnoreCase("y")) return true;
+		return false;
 	}
 }

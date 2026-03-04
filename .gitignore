@@ -41,8 +41,6 @@ bin/
 ### Mac OS ###
 .DS_Store
 
-Config.ini
-
 #Maven
 target/
 pom.xml.tag
@@ -61,3 +59,6 @@ buildNumber.properties
 .project
 # JDT-specific (Eclipse Java Development Tools)
 .classpath
+
+Config.ini
+test/
