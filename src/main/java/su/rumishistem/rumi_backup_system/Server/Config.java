@@ -20,6 +20,10 @@ public class Config {
 		public static String Backup = "";
 	}
 
+	public static class Syslog {
+		public static String Host = "";
+	}
+
 	public static void load() throws IOException {
 		HashMap<String, Object> config = new HashMap<>();
 
@@ -60,5 +64,7 @@ public class Config {
 
 		DIR.Temp = (String)config.get("DIR.TEMP");
 		DIR.Backup = (String)config.get("DIR.BACKUP");
+
+		Syslog.Host = (String)config.get("SYSLOG.HOST");
 	}
 }

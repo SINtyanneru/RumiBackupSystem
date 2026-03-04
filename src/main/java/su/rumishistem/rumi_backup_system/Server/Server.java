@@ -10,12 +10,14 @@ import java.time.format.DateTimeFormatter;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 
+import su.rumishistem.rumi_java_logger.RumiJavaLogger;
+import su.rumishistem.rumi_java_logger.SeverityLevel;
 import su.rumishistem.rumi_java_sql.SQL;
 import su.rumishistem.rumi_java_sql.SQLC;
 import su.rumishistem.rumi_java_sql.SQLValue;
 
 public class Server {
-	public static void main(String[] args) {
+	public static void main(String[] args) throws IOException {
 		System.out.println("RBS Server");
 
 		//設定

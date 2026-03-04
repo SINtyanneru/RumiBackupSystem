@@ -6,10 +6,16 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.security.MessageDigest;
 import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Map;
 import su.rumishistem.rumi_backup_system.Main;
 import su.rumishistem.rumi_backup_system.Server.Type.ClientType;
 import su.rumishistem.rumi_backup_system.Tool.Binary;
+import su.rumishistem.rumi_java_logger.FacilityCode;
+import su.rumishistem.rumi_java_logger.RumiJavaLogger;
+import su.rumishistem.rumi_java_logger.SeverityLevel;
 import su.rumishistem.rumi_java_sql.*;
 
 public class RBSServer {
@@ -17,6 +23,10 @@ public class RBSServer {
 
 	public static void start() {
 		try {
+			RumiJavaLogger logger = new RumiJavaLogger();
+			logger.hijack_std(SeverityLevel.Debug);
+			logger.set_syslog_server(Config.Syslog.Host);
+
 			ServerSocket tcp = new ServerSocket(Main.CLIENT_PORT);
 			System.out.println("ｸﾗｲｱﾝﾄｻｰﾊﾞｰ起動");
 
@@ -63,11 +73,13 @@ public class RBSServer {
 													type = ClientType.Client;
 													out.write(new byte[]{0x20});
 													out.flush();
+													logger.print(SeverityLevel.Debug, "ｸﾗｲｱﾝﾄ接続: " + socket.getInetAddress().toString());
 													continue;
 												case 0x02:
 													type = ClientType.Node;
 													out.write(new byte[]{0x20});
 													out.flush();
+													logger.print(SeverityLevel.Debug, "ﾉｰﾄﾞ接続: " + socket.getInetAddress().toString());
 													continue;
 											}
 										}
@@ -124,6 +136,8 @@ public class RBSServer {
 									out.write(new byte[]{0x10});
 									out.flush();
 									bais.close();
+
+									logger.print(SeverityLevel.Debug, "ﾊﾞｯｸｱｯﾌﾟ受信中: " + socket.getInetAddress().toString() + "から" + bucket_name + "(" + bucket_id + ")へ");
 
 									//チェックサム
 									MessageDigest md5 = MessageDigest.getInstance("MD5");
@@ -201,10 +215,12 @@ public class RBSServer {
 										//古いものを削除
 										for (Map<String, SQLValue> row:old_backup) {
 											String id = row.get("ID").as_string();
+											LocalDateTime date = ((Timestamp)row.get("CREATE_AT").as_object()).toLocalDateTime();
 											File f = new File(Config.DIR.Backup + id);
 											if (f.exists()) f.delete();
 
 											sql.update_execute("DELETE FROM `BACKUP` WHERE `ID` = ? LIMIT 1;", new Object[]{id});
+											logger.print(SeverityLevel.Debug, "ﾊﾞｯｸｱｯﾌﾟﾛｰﾃｰｼｮﾝ: " + bucket_name + "(" + bucket_id + ")から" + id + "(" + date.format(DateTimeFormatter.ISO_DATE_TIME) + ")" + "を削除");
 										}
 
 										sql.commit();
@@ -213,6 +229,8 @@ public class RBSServer {
 									//成功
 									out.write(new byte[]{0x20});
 									out.flush();
+
+									logger.print(SeverityLevel.Debug, "ﾊﾞｯｸｱｯﾌﾟ受信完了: " + socket.getInetAddress().toString() + "から" + bucket_name + "(" + bucket_id + ")へ" + backup_id + "として" + file_size + "ﾊﾞｲﾄ");
 								}
 							}
 						} catch (Exception ex) {
