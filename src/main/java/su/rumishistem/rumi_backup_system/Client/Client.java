@@ -1,29 +1,12 @@
 package su.rumishistem.rumi_backup_system.Client;
 
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.Socket;
+import java.io.*;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.FileVisitOption;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.security.MessageDigest;
-import java.util.Arrays;
-import java.util.Base64;
-import java.util.UUID;
-import java.util.function.Consumer;
-
-import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
-import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
+import java.util.*;
+import org.apache.commons.compress.archivers.tar.*;
 import org.apache.commons.io.IOUtils;
-
 import su.rumishistem.rumi_backup_system.Tool.Binary;
 
 public class Client {
@@ -34,79 +17,128 @@ public class Client {
 			if (args.length < 4) return;
 
 			String bucket = args[2];
-			File backup_target = new File(args[3]);
-
-			//バックアップする対象は存在するか
-			if (!backup_target.exists()) {
-				System.err.println("ﾊﾞｯｸｱｯﾌﾟ対象「"+backup_target.toString()+"」は存在しません。");
-				System.exit(1);
-				return;
-			}
-
 			File data = null;
 			String mimetype = null;
 			long size = 0;
 
-			if (backup_target.isDirectory()) {
-				System.out.println("ﾃﾞｨﾚｸﾄﾘをﾊﾞｯｸｱｯﾌﾟします");
-				data = new File("./" + UUID.randomUUID().toString());
+			switch (args[3]) {
+				case "mysql": {
+					if (args.length < 7) throw new IllegalArgumentException("MySQLのユーザー名、パスワード、一時ファイルの書き込み場所が必要です");
+					String mysql_user = args[4];
+					String mysql_password = args[5];
 
-				//TAR化
-				try {
-					OutputStream fout = Files.newOutputStream(data.toPath());
-					BufferedOutputStream bos = new BufferedOutputStream(fout);
-					TarArchiveOutputStream tar = new TarArchiveOutputStream(bos);
+					data = new File(args[6] + UUID.randomUUID().toString());
+					mimetype = "text/plain";
 
-					//POSIX
-					tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX);
+					ProcessBuilder pb = new ProcessBuilder("/usr/bin/mysqldump", "-u", mysql_user, "--all-databases", "--routines", "--events", "--triggers", "--single-transaction", "--flush-privileges");
+					pb.environment().put("MYSQL_PWD", mysql_password);
 
-					Files.walk(backup_target.toPath()).forEach((path)->{
+					try {
+						Process p = pb.start();
+						InputStream in = p.getInputStream();
+						FileOutputStream fos = new FileOutputStream(data);
+
+						byte[] buffer = new byte[8192];
+						int rl;
+						while ((rl = in.read(buffer)) != -1) {
+							fos.write(buffer, 0, rl);
+						}
+
+						fos.close();
+
+						int exit = p.waitFor();
+						if (exit != 0) {
+							throw new IOException("ステータスコード: " + exit);
+						}
+
+						size = data.length();
+						break;
+					} catch (IOException ex) {
+						if (data.exists()) data.delete();
+						ex.printStackTrace();
+						System.exit(1);
+						return;
+					} catch (InterruptedException ex) {
+						if (data.exists()) data.delete();
+						ex.printStackTrace();
+						System.exit(1);
+						return;
+					}
+				}
+
+				//ファイル
+				default: {
+					File backup_target = new File(args[3]);
+
+					//バックアップする対象は存在するか
+					if (!backup_target.exists()) {
+						System.err.println("ﾊﾞｯｸｱｯﾌﾟ対象「"+backup_target.toString()+"」は存在しません。");
+						System.exit(1);
+						return;
+					}
+
+					if (backup_target.isDirectory()) {
+						System.out.println("ﾃﾞｨﾚｸﾄﾘをﾊﾞｯｸｱｯﾌﾟします");
+						data = new File("./" + UUID.randomUUID().toString());
+
+						//TAR化
 						try {
-							String entry_name = backup_target.toPath().relativize(path).toString();
-							if (entry_name.isEmpty()) return;
+							OutputStream fout = Files.newOutputStream(data.toPath());
+							BufferedOutputStream bos = new BufferedOutputStream(fout);
+							TarArchiveOutputStream tar = new TarArchiveOutputStream(bos);
 
-							TarArchiveEntry entry = new TarArchiveEntry(entry_name);
-							entry.setSize(path.toFile().length());
-							tar.putArchiveEntry(entry);
+							//POSIX
+							tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX);
 
-							if (Files.isRegularFile(path)) {
-								InputStream is = Files.newInputStream(path);
+							Files.walk(backup_target.toPath()).forEach((path)->{
 								try {
-									IOUtils.copy(is, tar);
-								} finally {
-									is.close();
-								}
-							}
+									String entry_name = backup_target.toPath().relativize(path).toString();
+									if (entry_name.isEmpty()) return;
 
-							tar.closeArchiveEntry();
+									TarArchiveEntry entry = new TarArchiveEntry(entry_name);
+									entry.setSize(path.toFile().length());
+									tar.putArchiveEntry(entry);
+
+									if (Files.isRegularFile(path)) {
+										InputStream is = Files.newInputStream(path);
+										try {
+											IOUtils.copy(is, tar);
+										} finally {
+											is.close();
+										}
+									}
+
+									tar.closeArchiveEntry();
+								} catch (IOException ex) {
+									ex.printStackTrace();
+									System.err.println("TARの作成に失敗しました、ﾌｧｲﾙ: " + path);
+									System.exit(1);
+									return;
+								}
+							});
+
+							tar.finish();
+							tar.close();
+
+							mimetype = "application/x-tar";
 						} catch (IOException ex) {
 							ex.printStackTrace();
-							System.err.println("TARの作成に失敗しました、ﾌｧｲﾙ: " + path);
 							System.exit(1);
-							return;
 						}
-					});
+					} else {
+						System.out.println("ﾌｧｲﾙをﾊﾞｯｸｱｯﾌﾟします");
 
-					tar.finish();
-					tar.close();
+						try {
+							mimetype = Files.probeContentType(backup_target.toPath());
+							System.out.println("ﾌｧｲﾙのmimeﾀｲﾌﾟ: " + mimetype);
 
-					mimetype = "application/x-tar";
-				} catch (IOException ex) {
-					ex.printStackTrace();
-					System.exit(1);
-				}
-			} else {
-				System.out.println("ﾌｧｲﾙをﾊﾞｯｸｱｯﾌﾟします");
-
-				try {
-					mimetype = Files.probeContentType(backup_target.toPath());
-					System.out.println("ﾌｧｲﾙのmimeﾀｲﾌﾟ: " + mimetype);
-
-					data = new File("./" + UUID.randomUUID().toString());
-					Files.copy(backup_target.toPath(), data.toPath());
-				} catch (IOException ex) {
-					ex.printStackTrace();
-					System.exit(1);
+							data = new File("./" + UUID.randomUUID().toString());
+							Files.copy(backup_target.toPath(), data.toPath());
+						} catch (IOException ex) {
+							ex.printStackTrace();
+							System.exit(1);
+						}
+					}
 				}
 			}
 
@@ -175,6 +207,7 @@ public class Client {
 					rbs.close();
 				}
 			} catch (Exception ex) {
+				if (data.exists()) data.delete();
 				ex.printStackTrace();
 				System.exit(1);
 			}
