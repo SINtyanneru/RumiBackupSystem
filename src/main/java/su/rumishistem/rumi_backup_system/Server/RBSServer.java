@@ -10,6 +10,10 @@ import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Map;
+
+import com.github.luben.zstd.ZstdInputStream;
+import com.github.luben.zstd.ZstdOutputStream;
+
 import su.rumishistem.rumi_backup_system.Main;
 import su.rumishistem.rumi_backup_system.Server.Type.ClientType;
 import su.rumishistem.rumi_backup_system.Tool.Binary;
@@ -144,6 +148,8 @@ public class RBSServer {
 									//一時ファイル
 									File tmp_file = new File(Config.DIR.Temp + backup_id);
 									FileOutputStream fos = new FileOutputStream(tmp_file);
+									ZstdOutputStream zstd = new ZstdOutputStream(fos);
+									zstd.setLevel(20);
 
 									//データ受信
 									byte[] receive_buffer = new byte[8192];
@@ -151,11 +157,14 @@ public class RBSServer {
 									int receive_rl;
 									while ((receive_rl = in.read(receive_buffer)) != -1) {
 										md5.update(receive_buffer, 0, receive_rl);
-										fos.write(receive_buffer, 0, receive_rl);
+										zstd.write(receive_buffer, 0, receive_rl);
 
 										received_length += receive_rl;
 										if (file_size == received_length) break;
 									}
+
+									zstd.flush();
+									zstd.close();
 									fos.close();
 
 									//チェックサム受信待機
@@ -175,8 +184,8 @@ public class RBSServer {
 									}
 
 									try {
-										SQL.new_auto_commit_connection().update_execute("INSERT INTO `BACKUP` (`ID`, `BUCKET`, `CREATE_AT`, `SIZE`, `MIMETYPE`) VALUES (?, ?, NOW(), ?, ?)", new Object[]{
-											backup_id, bucket_id, file_size, mimetype
+										SQL.new_auto_commit_connection().update_execute("INSERT INTO `BACKUP` (`ID`, `BUCKET`, `CREATE_AT`, `COMPRESS_SIZE`, `ORIGINAL_SIZE`, `MIMETYPE`) VALUES (?, ?, NOW(), ?, ?, ?)", new Object[]{
+											backup_id, bucket_id, file_size, tmp_file.length(), mimetype
 										});
 									} catch (SQLException ex) {
 										ex.printStackTrace();
