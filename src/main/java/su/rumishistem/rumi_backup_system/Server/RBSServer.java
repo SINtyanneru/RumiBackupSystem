@@ -49,6 +49,8 @@ public class RBSServer {
 							File tmp_file = new File(Config.DIR.Temp + backup_id);
 							FileInputStream fis;
 
+							logger.print(SeverityLevel.Informational, "[ WORKER ] ﾜｰｶｰはﾊﾞｹｯﾄ(" + bucket_id + ")のﾊﾞｯｸｱｯﾌﾟ("+backup_id+")に取り掛かりました");
+
 							byte[] buffer = new byte[8192];
 							int rl;
 							long raw_size = tmp_file.length();
@@ -68,6 +70,7 @@ public class RBSServer {
 								deflate.close();
 								fis.close();
 								deflate_size = deflate_file.length();
+								logger.print(SeverityLevel.Informational, "[ WORKER ] ﾜｰｶｰはDeflateを終えました");
 							} catch (IOException ex) {
 								ex.printStackTrace();
 								//後始末
@@ -89,6 +92,7 @@ public class RBSServer {
 								zstd.close();
 								fis.close();
 								zstd_size = zstd_file.length();
+								logger.print(SeverityLevel.Informational, "[ WORKER ] ﾜｰｶｰはZstdを終えました");
 							} catch (IOException ex) {
 								ex.printStackTrace();
 								//後始末
@@ -110,6 +114,7 @@ public class RBSServer {
 								xz.close();
 								fis.close();
 								xz_size = xz_file.length();
+								logger.print(SeverityLevel.Informational, "[ WORKER ] ﾜｰｶｰはXZを終えました");
 							} catch (IOException ex) {
 								ex.printStackTrace();
 								//後始末
@@ -139,6 +144,7 @@ public class RBSServer {
 								min_compress_file = xz_file;
 								compress_type = "XZ";
 							}
+							logger.print(SeverityLevel.Informational, "[ WORKER ] "+min_compress_file.getName()+"が一番小さいです");
 
 							SQLC sql = SQL.new_connection();
 							try {
@@ -198,7 +204,7 @@ public class RBSServer {
 									if (f.exists()) f.delete();
 
 									sql.update_execute("DELETE FROM `BACKUP` WHERE `ID` = ? LIMIT 1;", new Object[]{id});
-									logger.print(SeverityLevel.Debug, "ﾊﾞｯｸｱｯﾌﾟﾛｰﾃｰｼｮﾝ: " + bucket_id + "から" + id + "(" + date.format(DateTimeFormatter.ISO_DATE_TIME) + ")" + "を削除");
+									logger.print(SeverityLevel.Debug, "[ WORKER ] ﾊﾞｯｸｱｯﾌﾟﾛｰﾃｰｼｮﾝ: " + bucket_id + "から" + id + "(" + date.format(DateTimeFormatter.ISO_DATE_TIME) + ")" + "を削除");
 								}
 							}
 
@@ -206,7 +212,7 @@ public class RBSServer {
 							sql.commit();
 							sql.close();
 
-							logger.print(SeverityLevel.Informational, "ﾊﾞｯｸｱｯﾌﾟを処理しました: " + backup_id + " ﾊﾞｹｯﾄ:" + bucket_id);
+							logger.print(SeverityLevel.Informational, "[ WORKER ] ﾜｰｶｰはﾊﾞｹｯﾄ(" + bucket_id + ")のﾊﾞｯｸｱｯﾌﾟ("+backup_id+")を終えました。");
 
 							//後始末
 							if (tmp_file.exists()) tmp_file.delete();
