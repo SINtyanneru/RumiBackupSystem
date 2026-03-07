@@ -31,6 +31,11 @@ public class SQLMigration {
 					ON UPDATE CASCADE
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 			"""
+		},
+		new String[]{
+			"""
+			ALTER TABLE `BACKUP` ADD COLUMN `COMPRESS_TYPE` VARCHAR(10) DEFAULT 'ZSTD';
+			"""
 		}
 	};
 	public static final int LATEST_SQL_VERSION = script_list.length;
