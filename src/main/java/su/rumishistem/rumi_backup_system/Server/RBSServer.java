@@ -11,7 +11,12 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.zip.DeflaterOutputStream;
 
 import org.checkerframework.checker.units.qual.min;
@@ -30,6 +35,7 @@ import su.rumishistem.rumi_java_sql.*;
 public class RBSServer {
 	private static final byte[] WELCOME_MESSAGE = new byte[]{0x25, 'R', 'B', 'S', 0x00, 0x00, 0x00, 0x00, 0x03, '1', '.', '0'};
 	private static BlockingQueue<BackupQueue> queue_list = new LinkedBlockingQueue<>();
+	private static ExecutorService thread_pool = Executors.newFixedThreadPool(10);
 
 	public static void start() {
 		try {
@@ -47,81 +53,109 @@ public class RBSServer {
 							long backup_id = queue.backup_id;
 							String mimetype = queue.mimetype;
 							File tmp_file = new File(Config.DIR.Temp + backup_id);
-							FileInputStream fis;
 
 							logger.print(SeverityLevel.Informational, "[ WORKER ] ﾜｰｶｰはﾊﾞｹｯﾄ(" + bucket_id + ")のﾊﾞｯｸｱｯﾌﾟ("+backup_id+")に取り掛かりました");
 
-							byte[] buffer = new byte[8192];
-							int rl;
 							long raw_size = tmp_file.length();
-							long deflate_size = 0;
-							long zstd_size = 0;
-							long xz_size = 0;
+							AtomicLong deflate_size = new AtomicLong(0);
+							AtomicLong zstd_size = new AtomicLong(0);
+							AtomicLong xz_size = new AtomicLong(0);
+
+							
+							CountDownLatch cdl = new CountDownLatch(3);
+							AtomicBoolean is_error = new AtomicBoolean(false);
+
+							File deflate_file = new File(Config.DIR.Temp + backup_id + ".deflate");
+							File zstd_file = new File(Config.DIR.Temp + backup_id + ".zstd");
+							File xz_file = new File(Config.DIR.Temp + backup_id + ".xz");
 
 							//Deflate
-							File deflate_file = new File(Config.DIR.Temp + backup_id + ".deflate");
-							try {
-								FileOutputStream deflate_fos = new FileOutputStream(deflate_file);
-								DeflaterOutputStream deflate = new DeflaterOutputStream(deflate_fos);
-								fis = new FileInputStream(tmp_file);
-								while ((rl = fis.read(buffer)) != -1) {
-									deflate.write(buffer, 0, rl);
+							thread_pool.submit(new Runnable() {
+								@Override
+								public void run() {
+									try {
+										FileOutputStream deflate_fos = new FileOutputStream(deflate_file);
+										DeflaterOutputStream deflate = new DeflaterOutputStream(deflate_fos);
+										FileInputStream fis = new FileInputStream(tmp_file);
+										byte[] buffer = new byte[8192];
+										int rl;
+										while ((rl = fis.read(buffer)) != -1) {
+											deflate.write(buffer, 0, rl);
+										}
+										deflate.close();
+										fis.close();
+										deflate_size.set(deflate_file.length());
+										logger.print(SeverityLevel.Informational, "[ WORKER ] ﾜｰｶｰはDeflateを終えました");
+									} catch (IOException ex) {
+										ex.printStackTrace();
+										is_error.set(true);
+									}
+									cdl.countDown();
 								}
-								deflate.close();
-								fis.close();
-								deflate_size = deflate_file.length();
-								logger.print(SeverityLevel.Informational, "[ WORKER ] ﾜｰｶｰはDeflateを終えました");
-							} catch (IOException ex) {
-								ex.printStackTrace();
-								//後始末
-								deflate_file.delete();
-								tmp_file.delete();
-								return;
-							}
+							});
 
 							//Zstd生成
-							File zstd_file = new File(Config.DIR.Temp + backup_id + ".zstd");
-							try {
-								FileOutputStream zstd_fos = new FileOutputStream(zstd_file);
-								ZstdOutputStream zstd = new ZstdOutputStream(zstd_fos);
-								zstd.setLevel(14);
-								fis = new FileInputStream(tmp_file);
-								while ((rl = fis.read(buffer)) != -1) {
-									zstd.write(buffer, 0, rl);
+							thread_pool.submit(new Runnable() {
+								@Override
+								public void run() {
+									try {
+										FileOutputStream zstd_fos = new FileOutputStream(zstd_file);
+										ZstdOutputStream zstd = new ZstdOutputStream(zstd_fos);
+										zstd.setLevel(14);
+										FileInputStream fis = new FileInputStream(tmp_file);
+										byte[] buffer = new byte[8192];
+										int rl;
+										while ((rl = fis.read(buffer)) != -1) {
+											zstd.write(buffer, 0, rl);
+										}
+										zstd.close();
+										fis.close();
+										zstd_size.set(zstd_file.length());
+										logger.print(SeverityLevel.Informational, "[ WORKER ] ﾜｰｶｰはZstdを終えました");
+									} catch (IOException ex) {
+										ex.printStackTrace();
+										is_error.set(true);
+									}
+									cdl.countDown();
 								}
-								zstd.close();
-								fis.close();
-								zstd_size = zstd_file.length();
-								logger.print(SeverityLevel.Informational, "[ WORKER ] ﾜｰｶｰはZstdを終えました");
-							} catch (IOException ex) {
-								ex.printStackTrace();
-								//後始末
-								deflate_file.delete();
-								zstd_file.delete();
-								tmp_file.delete();
-								return;
-							}
+							});
 
 							//XZ
-							File xz_file = new File(Config.DIR.Temp + backup_id + ".xz");
-							try {
-								FileOutputStream xz_fos = new FileOutputStream(xz_file);
-								XZOutputStream xz = new XZOutputStream(xz_fos, new LZMA2Options(6));
-								fis = new FileInputStream(tmp_file);
-								while ((rl = fis.read(buffer)) != -1) {
-									xz.write(buffer, 0, rl);
+							thread_pool.submit(new Runnable() {
+								@Override
+								public void run() {
+									try {
+										FileOutputStream xz_fos = new FileOutputStream(xz_file);
+										XZOutputStream xz = new XZOutputStream(xz_fos, new LZMA2Options(6));
+										FileInputStream fis = new FileInputStream(tmp_file);
+										byte[] buffer = new byte[8192];
+										int rl;
+										while ((rl = fis.read(buffer)) != -1) {
+											xz.write(buffer, 0, rl);
+										}
+										xz.close();
+										fis.close();
+										xz_size.set(xz_file.length());
+										logger.print(SeverityLevel.Informational, "[ WORKER ] ﾜｰｶｰはXZを終えました");
+									} catch (IOException ex) {
+										ex.printStackTrace();
+										is_error.set(true);
+									}
+									cdl.countDown();
 								}
-								xz.close();
-								fis.close();
-								xz_size = xz_file.length();
-								logger.print(SeverityLevel.Informational, "[ WORKER ] ﾜｰｶｰはXZを終えました");
-							} catch (IOException ex) {
-								ex.printStackTrace();
+							});
+
+							//終了を待つ
+							cdl.await();
+
+							//エラー落ちか？
+							if (is_error.get()) {
 								//後始末
-								deflate_file.delete();
-								zstd_file.delete();
-								xz_file.delete();
-								tmp_file.delete();
+								if (tmp_file.exists()) tmp_file.delete();
+								if (deflate_file.exists()) deflate_file.delete();
+								if (zstd_file.exists()) zstd_file.delete();
+								if (xz_file.exists()) xz_file.delete();
+								logger.print(SeverityLevel.Error, "[ WORKER ] ﾜｰｶｰはｴﾗｰで終了しました");
 								return;
 							}
 
@@ -129,18 +163,18 @@ public class RBSServer {
 							long min_size = raw_size;
 							File min_compress_file = tmp_file;
 							String compress_type = "RAW";
-							if (deflate_size < min_size) {
-								min_size = deflate_size;
+							if (deflate_size.get() < min_size) {
+								min_size = deflate_size.get();
 								min_compress_file = deflate_file;
 								compress_type = "DEFLATE";
 							}
-							if (zstd_size < min_size) {
-								min_size = zstd_size;
+							if (zstd_size.get() < min_size) {
+								min_size = zstd_size.get();
 								min_compress_file = zstd_file;
 								compress_type = "ZSTD";
 							}
-							if (xz_size < min_size) {
-								min_size = xz_size;
+							if (xz_size.get() < min_size) {
+								min_size = xz_size.get();
 								min_compress_file = xz_file;
 								compress_type = "XZ";
 							}
@@ -154,10 +188,10 @@ public class RBSServer {
 							} catch (SQLException ex) {
 								ex.printStackTrace();
 								//後始末
-								deflate_file.delete();
-								zstd_file.delete();
-								xz_file.delete();
-								tmp_file.delete();
+								if (tmp_file.exists()) tmp_file.delete();
+								if (deflate_file.exists()) deflate_file.delete();
+								if (zstd_file.exists()) zstd_file.delete();
+								if (xz_file.exists()) xz_file.delete();
 								return;
 							}
 
@@ -168,10 +202,10 @@ public class RBSServer {
 								ex.printStackTrace();
 								//後始末
 								sql.rollback();
-								deflate_file.delete();
-								zstd_file.delete();
-								xz_file.delete();
-								tmp_file.delete();
+								if (tmp_file.exists()) tmp_file.delete();
+								if (deflate_file.exists()) deflate_file.delete();
+								if (zstd_file.exists()) zstd_file.delete();
+								if (xz_file.exists()) xz_file.delete();
 								return;
 							}
 
@@ -237,6 +271,7 @@ public class RBSServer {
 				public void run() {
 					try {
 						tcp.close();
+						thread_pool.shutdown();
 					} catch (IOException ex) {
 						ex.printStackTrace();
 					}
